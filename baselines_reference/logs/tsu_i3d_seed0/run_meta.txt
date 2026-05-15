@@ -1,0 +1,20 @@
+date: 2026-02-06T12:59:06+01:00
+host: esterel35-2.sophia.grid5000.fr
+pwd: /srv/storage/stars@storage3.sophia./mdiiorio/masters-thesis/Traineeship/MS-Temba
+git_commit: 9bbb55dfd0bdb456ae38d3887be7d5a0eeda30ff
+git_status:
+## main...origin/main [ahead 7]
+ M vim/MSTemba_main.py
+ M vim/charades_dataloader.py
+?? tools/
+module_list:
+No modules loaded
+torch 2.1.1+cu118 cuda 11.8 avail True
+nvcc:
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2021 NVIDIA Corporation
+Built on Sun_Feb_14_21:12:58_PST_2021
+Cuda compilation tools, release 11.2, V11.2.152
+Build cuda_11.2.r11.2/compiler.29618528_0
+script: /srv/storage/stars@storage3.sophia./mdiiorio/masters-thesis/Traineeship/MS-Temba/vim/scripts/run_tsu_i3d_seed0.sh
+resume: False

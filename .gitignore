@@ -1,60 +1,41 @@
 # === Python ===
 __pycache__/
 *.py[cod]
-*$py.class
 *.so
-.Python
 *.egg-info/
-.pytest_cache/
-.ipynb_checkpoints/
 
-# === Build artifacts ===
+# === Build / cache ===
 build/
 dist/
-*.egg
-*.whl
+.build/
 
-# === Experiments & data (NEVER commit) ===
+# === Experiments output (gitignored) ===
 experiments/
 runs/
 exp/
-logs/
-outputs/
-output/
 wandb/
+tensorboard_logs/
 *.log
 
-# === Checkpoints & features (NEVER commit) ===
-*.pth
-*.pt
-*.ckpt
+# === Heavy files (mai committare) ===
 *.pkl
 *.npy
 *.npz
+*.pt
+*.ckpt
 
-# === Datasets (symlinks) ===
-data/features_*/
-data/frames_*/
-data/*.lock
+# === Symlinks data ===
+data/features/
 
-# === IDE ===
+# === Baseline checkpoints (pesanti, fuori repo) ===
+baselines_reference/checkpoints/
+
+# === IDE / OS ===
 .vscode/
 .idea/
-
-# === OS ===
 .DS_Store
-Thumbs.db
 
-# === Local env / config ===
-.env
-*.local
-
-# === MS-Temba specific ===
-tensorboard_logs/
-training.log
-best_model.pth
-*.csv
-!results/**/*.csv
-
-# === Annotations JSON: KEEP (sono nel repo upstream) ===
-!data/*.json
+# === Eccezioni: file leggeri da tenere ===
+!baselines_reference/logs/**/*.log
+!baselines_reference/scripts_historic/*.sh
+!baselines_reference/README.md
