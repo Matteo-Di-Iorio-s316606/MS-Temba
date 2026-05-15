@@ -545,7 +545,7 @@ if __name__ == '__main__':
         from charades_dataloader import mt_collate_fn as collate_fn
     
     if args.dataset == 'charades':
-        train_split = '/data/asinha13/projects/MAD/MS-TCT/data/charades.json'
+        train_split = '/srv/storage/stars@storage3.sophia./mdiiorio/masters-thesis/Traineeship/MS-Temba-v2/data/charades.json'
         test_split = train_split
         rgb_root =  args.rgb_root 
         flow_root = '/flow_feat_path/' # optional
