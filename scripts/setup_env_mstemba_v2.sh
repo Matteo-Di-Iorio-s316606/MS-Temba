@@ -84,10 +84,10 @@ print('device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else
 print('compute capability:', torch.cuda.get_device_capability(0) if torch.cuda.is_available() else 'N/A')
 "
 
-# === STEP 5: vim_requirements.txt ===
+# === STEP 5: requirements_mstemba_v2.txt ===
 echo ""
-echo "[5/7] Install vim_requirements.txt"
-pip install -r vim/vim_requirements.txt
+echo "[5/7] Install requirements_mstemba_v2.txt"
+pip install -r requirements_mstemba_v2.txt
 
 # === STEP 6: causal_conv1d ===
 echo ""
