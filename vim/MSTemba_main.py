@@ -31,6 +31,8 @@ from extensions.checkpoint import (
     build_state,
 )
 
+from extensions.metrics_logger import MetricsLogger
+
 parser = argparse.ArgumentParser()
 parser.add_argument('-mode', type=str, help='rgb or flow (or joint for eval)')
 parser.add_argument('-train', type=str, default='True', help='train or eval')
@@ -164,101 +166,131 @@ def load_data(train_split, val_split, root):
 
 def run(models, criterion, num_epochs=50,
         ckpt_manager=None, early_stopper=None,
-        oar_signal=None, model_ema=None, start_epoch=0):
+        oar_signal=None, model_ema=None, start_epoch=0,
+        metrics_logger=None):
     since = time.time()
-    # `Best_*` defaults; overridden by ckpt if resuming.
+    # Defaults; will be overridden if a checkpoint was loaded before run().
     Best_val_map = 0.0
     Best_block_sample_val_maps = [0.0, 0.0, 0.0]
     writer = SummaryWriter(log_dir=os.path.join(args.output_dir, 'tensorboard_logs'))
 
-    for epoch in range(start_epoch, num_epochs):
-        since1 = time.time()
-        logging.info(f'Epoch {epoch}/{num_epochs - 1}')
-        logging.info('-' * 10)
-        for model, gpu, dataloader, optimizer, sched, model_file in models:
-            # Training
-            train_map, train_loss, block_train_maps, avg_diversity_loss = train_step(
-                model, gpu, optimizer, dataloader['train'], epoch
-            )
-            logging.info(f'Epoch {epoch} - Train MAP: {train_map:.2f}, Train Loss: {train_loss:.4f}')
-
-            # Validation
-            prob_val, val_loss, val_map, sample_val_map, block_val_maps, block_sample_val_maps = val_step(
-                model, gpu, dataloader['val'], epoch
-            )
-            logging.info(f'Epoch {epoch} - Val MAP: {val_map:.2f}, Val Loss: {val_loss:.4f}')
-            logging.info(f'Epoch {epoch} - Sampled Val MAP: {sample_val_map:.2f}')
-            sched.step(val_loss)
-
-            # TensorBoard
-            writer.add_scalar('Loss/train', train_loss, epoch)
-            writer.add_scalar('Loss/val', val_loss, epoch)
-            writer.add_scalar('Loss/diversity', avg_diversity_loss, epoch)
-            writer.add_scalar('mAP/train', train_map, epoch)
-            writer.add_scalar('mAP/val', val_map, epoch)
-            writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
-            for i in range(3):
-                writer.add_scalar(f'Block_{i+1}/train_map', block_train_maps[i], epoch)
-                writer.add_scalar(f'Block_{i+1}/val_map', block_val_maps[i], epoch)
-                writer.add_scalar(f'Block_{i+1}/sampled_val_map', block_sample_val_maps[i], epoch)
-
-            epoch_time = time.time() - since1
-            total_time = time.time() - since
-            logging.info(f"Epoch {epoch}, Total_Time {total_time:.2f}, Epoch_time {epoch_time:.2f}")
-            writer.add_scalar('Time/epoch', epoch_time, epoch)
-            writer.add_scalar('Time/total', total_time, epoch)
-
-            # ---- Track bests ----
-            improved = val_map > Best_val_map
-            if improved:
-                Best_val_map = val_map
-                logging.info(f"Epoch {epoch}, Best Val MAP updated: {Best_val_map:.4f}")
-                pickle.dump(prob_val,
-                            open(os.path.join(args.output_dir, f'{epoch}.pkl'), 'wb'),
-                            pickle.HIGHEST_PROTOCOL)
-                writer.add_scalar('Best_mAP/val', Best_val_map, epoch)
-
-            for i in range(3):
-                if Best_block_sample_val_maps[i] < block_sample_val_maps[i]:
-                    Best_block_sample_val_maps[i] = block_sample_val_maps[i]
-                    logging.info(f"Epoch {epoch}, Block {i+1} Best Sampled Val MAP: "
-                                 f"{Best_block_sample_val_maps[i]:.4f}")
-                    writer.add_scalar(f'Block_{i+1}/Best_sampled_val_map',
-                                      Best_block_sample_val_maps[i], epoch)
-
-            # ---- Checkpointing ----
-            if ckpt_manager is not None:
-                state = build_state(
-                    epoch=epoch + 1,  # epoch we are *resuming from* next time
-                    best_val_map=Best_val_map,
-                    best_block_val_maps=Best_block_sample_val_maps,
-                    model=model, optimizer=optimizer, scheduler=sched,
-                    ema=model_ema, early_stopper=early_stopper,
+    try:
+        for epoch in range(start_epoch, num_epochs):
+            since1 = time.time()
+            logging.info(f'Epoch {epoch}/{num_epochs - 1}')
+            logging.info('-' * 10)
+            for model, gpu, dataloader, optimizer, sched, model_file in models:
+                # ---- Training ----
+                train_map, train_loss, block_train_maps, avg_diversity_loss = train_step(
+                    model, gpu, optimizer, dataloader['train'], epoch
                 )
-                ckpt_manager.save(state, kind="last")
-                if improved:
-                    ckpt_manager.save(state, kind="best")
-                for i in range(3):
-                    if Best_block_sample_val_maps[i] == block_sample_val_maps[i] \
-                            and block_sample_val_maps[i] > 0:
-                        ckpt_manager.save(state, kind=f"block_{i}")
+                logging.info(f'Epoch {epoch} - Train MAP: {train_map:.2f}, Train Loss: {train_loss:.4f}')
 
-            # ---- Early stop ----
-            if early_stopper is not None:
-                early_stopper.update(val_map)
-                if early_stopper.should_stop:
-                    logging.info(f"[early-stop] no val_map improvement in "
-                                 f"{early_stopper.patience} epochs, stopping at epoch {epoch}")
-                    writer.close()
+                # ---- Validation ----
+                (prob_val, val_loss, val_map, sample_val_map,
+                 block_val_maps, block_sample_val_maps,
+                 ap_full_pc, ap_sampled_pc,
+                 block_ap_full_pc, block_ap_sampled_pc) = val_step(
+                    model, gpu, dataloader['val'], epoch
+                )
+                logging.info(f'Epoch {epoch} - Val MAP: {val_map:.2f}, Val Loss: {val_loss:.4f}')
+                logging.info(f'Epoch {epoch} - Sampled Val MAP: {sample_val_map:.2f}')
+                sched.step(val_loss)
+
+                # ---- TensorBoard ----
+                writer.add_scalar('Loss/train', train_loss, epoch)
+                writer.add_scalar('Loss/val', val_loss, epoch)
+                writer.add_scalar('Loss/diversity', avg_diversity_loss, epoch)
+                writer.add_scalar('mAP/train', train_map, epoch)
+                writer.add_scalar('mAP/val', val_map, epoch)
+                writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], epoch)
+                for i in range(3):
+                    writer.add_scalar(f'Block_{i+1}/train_map', block_train_maps[i], epoch)
+                    writer.add_scalar(f'Block_{i+1}/val_map', block_val_maps[i], epoch)
+                    writer.add_scalar(f'Block_{i+1}/sampled_val_map', block_sample_val_maps[i], epoch)
+
+                epoch_time = time.time() - since1
+                total_time = time.time() - since
+                logging.info(f"Epoch {epoch}, Total_Time {total_time:.2f}, Epoch_time {epoch_time:.2f}")
+                writer.add_scalar('Time/epoch', epoch_time, epoch)
+                writer.add_scalar('Time/total', total_time, epoch)
+
+                # ---- Per-epoch summary + per-class metrics ----
+                if metrics_logger is not None:
+                    metrics_logger.log_epoch_summary(
+                        epoch=epoch,
+                        lr=optimizer.param_groups[0]['lr'],
+                        train_loss=float(train_loss),
+                        train_map=float(train_map),
+                        val_loss=float(val_loss),
+                        val_map=float(val_map),
+                        sample_val_map=float(sample_val_map),
+                        **{f"block_{i+1}_train_map": float(block_train_maps[i]) for i in range(3)},
+                        **{f"block_{i+1}_val_map": float(block_val_maps[i]) for i in range(3)},
+                        **{f"block_{i+1}_sample_val_map": float(block_sample_val_maps[i]) for i in range(3)},
+                        diversity_loss=float(avg_diversity_loss),
+                        epoch_time_s=epoch_time,
+                    )
+                    metrics_logger.log_epoch_per_class(
+                        epoch=epoch,
+                        ap_full=ap_full_pc,
+                        ap_sampled=ap_sampled_pc,
+                        block_ap_full=block_ap_full_pc,
+                        block_ap_sampled=block_ap_sampled_pc,
+                    )
+
+                # ---- Track bests ----
+                improved = val_map > Best_val_map
+                if improved:
+                    Best_val_map = val_map
+                    logging.info(f"Epoch {epoch}, Best Val MAP updated: {Best_val_map:.4f}")
+                    pickle.dump(prob_val,
+                                open(os.path.join(args.output_dir, f'{epoch}.pkl'), 'wb'),
+                                pickle.HIGHEST_PROTOCOL)
+                    writer.add_scalar('Best_mAP/val', Best_val_map, epoch)
+
+                for i in range(3):
+                    if Best_block_sample_val_maps[i] < block_sample_val_maps[i]:
+                        Best_block_sample_val_maps[i] = block_sample_val_maps[i]
+                        logging.info(f"Epoch {epoch}, Block {i+1} Best Sampled Val MAP: "
+                                     f"{Best_block_sample_val_maps[i]:.4f}")
+                        writer.add_scalar(f'Block_{i+1}/Best_sampled_val_map',
+                                          Best_block_sample_val_maps[i], epoch)
+
+                # ---- Checkpointing ----
+                if ckpt_manager is not None:
+                    state = build_state(
+                        epoch=epoch + 1,  # next epoch to run on resume
+                        best_val_map=Best_val_map,
+                        best_block_val_maps=Best_block_sample_val_maps,
+                        model=model, optimizer=optimizer, scheduler=sched,
+                        ema=model_ema, early_stopper=early_stopper,
+                    )
+                    ckpt_manager.save(state, kind="last")
+                    if improved:
+                        ckpt_manager.save(state, kind="best")
+                    for i in range(3):
+                        if Best_block_sample_val_maps[i] == block_sample_val_maps[i] \
+                                and block_sample_val_maps[i] > 0:
+                            ckpt_manager.save(state, kind=f"block_{i}")
+
+                # ---- Early stop ----
+                if early_stopper is not None:
+                    early_stopper.update(val_map)
+                    if early_stopper.should_stop:
+                        logging.info(f"[early-stop] no val_map improvement in "
+                                     f"{early_stopper.patience} epochs, stopping at epoch {epoch}")
+                        return
+
+                # ---- OAR walltime signal ----
+                if oar_signal is not None and oar_signal.should_exit:
+                    logging.info(f"[oar] exiting after epoch {epoch} due to SIGUSR2")
                     return
 
-            # ---- OAR walltime signal ----
-            if oar_signal is not None and oar_signal.should_exit:
-                logging.info(f"[oar] exiting after epoch {epoch} due to SIGUSR2")
-                writer.close()
-                return
-
-    writer.close()
+    finally:
+        if metrics_logger is not None:
+            metrics_logger.finalize()
+        writer.close()
 
 
 def eval_model(model, dataloader, baseline=False):
@@ -531,32 +563,46 @@ def val_step(model, gpu, dataloader, epoch):
     # Calculate metrics for each block
     block_val_maps = []
     block_sample_val_maps = []
+    block_ap_full_per_class: list[torch.Tensor] = []
+    block_ap_sampled_per_class: list[torch.Tensor] = []
+    
     for i in range(3):
         block_val_map = torch.sum(100 * block_apms[i].value()) / torch.nonzero(100 * block_apms[i].value()).size()[0]
         block_sample_val_map = torch.sum(100 * block_sampled_apms[i].value()) / torch.nonzero(100 * block_sampled_apms[i].value()).size()[0]
         block_val_maps.append(block_val_map)
         block_sample_val_maps.append(block_sample_val_map)
-        
+
         # Log block metrics
         logging.info(f'Epoch {epoch}, Block {i+1} Full-val-map: {block_val_map:.4f}')
         logging.info(f'Epoch {epoch}, Block {i+1} sampled-val-map: {block_sample_val_map:.4f}')
         logging.info(f'Block {i+1} Sampled AP values: {100 * block_sampled_apms[i].value()}')
-        
+
         # Save block probabilities
         block_dir = os.path.join(args.output_dir, f'block_{i+1}')
         pickle.dump(block_full_probs[i], open(os.path.join(block_dir, f'{epoch}.pkl'), 'wb'), pickle.HIGHEST_PROTOCOL)
-        
+
+        # Capture per-class AP BEFORE reset.
+        block_ap_full_per_class.append(block_apms[i].value().detach().cpu())
+        block_ap_sampled_per_class.append(block_sampled_apms[i].value().detach().cpu())
+
         block_apms[i].reset()
         block_sampled_apms[i].reset()
 
     logging.info(f'Epoch {epoch}, Final Full-val-map: {val_map:.4f}')
     logging.info(f'Epoch {epoch}, Final sampled-val-map: {sample_val_map:.4f}')
     logging.info(f'Final Sampled AP values: {100 * sampled_apm.value()}')
-    
+
+    # Capture per-class AP BEFORE reset.
+    ap_full_per_class = apm.value().detach().cpu()
+    ap_sampled_per_class = sampled_apm.value().detach().cpu()
+
     apm.reset()
     sampled_apm.reset()
-    
-    return full_probs, epoch_loss, val_map, sample_val_map, block_val_maps, block_sample_val_maps
+
+    return (full_probs, epoch_loss, val_map, sample_val_map,
+            block_val_maps, block_sample_val_maps,
+            ap_full_per_class, ap_sampled_per_class,
+            block_ap_full_per_class, block_ap_sampled_per_class)
 
 
 def setup_logging(output_dir):
@@ -652,6 +698,12 @@ if __name__ == '__main__':
         )
         oar_signal = OARSignalHandler()
 
+        metrics_logger = MetricsLogger(
+            output_dir=args.output_dir,
+            class_names=None,  # TODO: load Charades class names if available
+            n_blocks=3,
+        )
+
         start_epoch = 0
         if args.resume:
             loaded = ckpt_manager.load(
@@ -674,4 +726,5 @@ if __name__ == '__main__':
             oar_signal=oar_signal,
             model_ema=model_ema,
             start_epoch=start_epoch,
+            metrics_logger=metrics_logger,
         )
