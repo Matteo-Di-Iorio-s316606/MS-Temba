@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# =========================================================
+#  IMPORTANT: this file must be SOURCED, not executed.
+#  Usage:  source activate_mstemba.sh
+# =========================================================
+#
 # To be SOURCED (not executed):  source activate_mstemba.sh
 #
 # Activates the mstemba_v2 conda env, loads CUDA, and exports REPO.
