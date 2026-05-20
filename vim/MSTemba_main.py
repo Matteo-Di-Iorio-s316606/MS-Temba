@@ -1,3 +1,4 @@
+import sys
 import time
 import argparse
 import csv
@@ -65,6 +66,9 @@ parser.add_argument('-early_stop_patience', type=int, default=10,
                     help='Epochs without val_map improvement before stopping. 0 = disabled.')
 parser.add_argument('-early_stop_min_delta', type=float, default=0.0,
                     help='Minimum val_map improvement to reset patience counter.')
+parser.add_argument('-eval_only', type=str, default='False',
+                    help='If "True": load -resume checkpoint, run one validation pass, '
+                         'write per-class metrics, exit. Requires -resume. Skips training.')
 
 # Add new arguments from main_no_teacher.py
 parser.add_argument('--model', default='vim_tiny_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2', type=str, metavar='MODEL',
@@ -74,7 +78,7 @@ parser.add_argument('--model', default='vim_tiny_patch16_224_bimambav2_final_poo
 # parser.add_argument('--drop-path', type=float, default=0.1, metavar='PCT', help='Drop path rate (default: 0.1)')
 parser.add_argument('--model-ema', action='store_true')
 parser.add_argument('--no-model-ema', action='store_false', dest='model_ema')
-parser.set_defaults(model_ema=True)
+parser.set_defaults(model_ema=False)    # Prima era True, ora False per disabilitare EMA di default
 parser.add_argument('--model-ema-decay', type=float, default=0.99996, help='')
 parser.add_argument('--model-ema-force-cpu', action='store_true', default=False, help='')
 
@@ -652,6 +656,69 @@ if __name__ == '__main__':
 
     setup_logging(args.output_dir)
     logging.info(f"Arguments: {args}")
+
+    # -------------------------------------------------------------------------
+    # Eval-only branch: load checkpoint, run one validation pass, write CSVs.
+    # Used to generate per-class baselines from pre-existing checkpoints
+    # (e.g. legacy state_dicts from baselines_reference/).
+    # -------------------------------------------------------------------------
+    if args.eval_only == 'True':
+        if not args.resume:
+            raise ValueError("-eval_only=True requires -resume <ckpt_path>")
+
+        in_feat_dim = 1024 if args.backbone == 'i3d' else 768
+        model = create_model(
+            args.model, pretrained=False, num_classes=classes,
+            drop_rate=args.drop, drop_path_rate=args.drop_path,
+            drop_block_rate=None, in_feat_dim=in_feat_dim,
+        ).cuda()
+
+        # Auto-detect checkpoint format: v2 CheckpointState payload vs legacy flat state_dict.
+        ck = torch.load(args.resume, map_location='cpu')
+        if isinstance(ck, dict) and 'model_state' in ck:
+            state_dict = ck['model_state']
+            src = f"v2 payload (epoch={ck.get('epoch', '?')}, " \
+                  f"best_val_map={ck.get('best_val_map', float('nan')):.4f})"
+        else:
+            state_dict = ck
+            src = "legacy flat state_dict"
+        model.load_state_dict(state_dict, strict=True)
+        logging.info(f"[eval-only] loaded {args.resume} -- {src}")
+
+        n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        logging.info(f"[eval-only] model params: {n_parameters:,}")
+
+        metrics_logger = MetricsLogger(
+            output_dir=args.output_dir, class_names=None, n_blocks=3,
+        )
+
+        # Single validation pass (epoch=0 is just a placeholder for the logger).
+        (_prob, val_loss, val_map, sample_val_map,
+         block_val_maps, block_sample_val_maps,
+         ap_full_pc, ap_sampled_pc,
+         block_ap_full_pc, block_ap_sampled_pc) = val_step(
+            model, 0, dataloaders['val'], epoch=0,
+        )
+
+        metrics_logger.log_epoch_summary(
+            epoch=0, lr=0.0, train_loss=0.0, train_map=0.0,
+            val_loss=float(val_loss), val_map=float(val_map),
+            sample_val_map=float(sample_val_map),
+            **{f"block_{i+1}_train_map": 0.0 for i in range(3)},
+            **{f"block_{i+1}_val_map": float(block_val_maps[i]) for i in range(3)},
+            **{f"block_{i+1}_sample_val_map": float(block_sample_val_maps[i]) for i in range(3)},
+            diversity_loss=0.0, epoch_time_s=0.0,
+        )
+        metrics_logger.log_epoch_per_class(
+            epoch=0,
+            ap_full=ap_full_pc, ap_sampled=ap_sampled_pc,
+            block_ap_full=block_ap_full_pc, block_ap_sampled=block_ap_sampled_pc,
+        )
+        metrics_logger.finalize()
+
+        logging.info(f"[eval-only] done. val_map={val_map:.4f} Full / "
+                     f"{sample_val_map:.4f} sampled.")
+        sys.exit(0)
 
     if args.train:
         if args.backbone == 'i3d':
