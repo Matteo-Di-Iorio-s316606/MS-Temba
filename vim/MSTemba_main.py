@@ -638,12 +638,19 @@ if __name__ == '__main__':
         classes = 157
         
     elif args.dataset == 'tsu':
-        train_split = '/data/asinha13/projects/MAD/MS-TCT/data/smarthome_CS_51.json'
+        train_split = '/srv/storage/stars@storage3.sophia./mdiiorio/masters-thesis/Traineeship/MS-Temba-v2/data/smarthome.json'
         test_split = train_split
         rgb_root =  args.rgb_root 
         flow_root = '/flow_feat_path/' # optional
         classes = 51
 
+    elif args.dataset == 'multithumos':
+        train_split = '/srv/storage/stars@storage3.sophia./mdiiorio/masters-thesis/Traineeship/MS-Temba-v2/data/multithumos.json'
+        test_split = train_split
+        rgb_root = args.rgb_root
+        flow_root = '/flow_feat_path/'  # optional
+        classes = 65
+        
     if args.mode == 'flow':
         print('flow mode', flow_root)
         dataloaders, datasets = load_data(train_split, test_split, flow_root)
