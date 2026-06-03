@@ -25,6 +25,9 @@ from timm.utils import NativeScaler, get_state_dict, ModelEma
 
 import models_MSTemba
 
+# registers 'mstemba_mlp_proj' via @register_model
+import models.extensions.mstemba_mlp_proj  # noqa: F401  registers MLP variant
+
 from extensions.checkpoint import (
     CheckpointManager,
     EarlyStopper,
@@ -70,6 +73,11 @@ parser.add_argument('-eval_only', type=str, default='False',
                     help='If "True": load -resume checkpoint, run one validation pass, '
                          'write per-class metrics, exit. Requires -resume. Skips training.')
 
+# Add argument for mstemba_mlp_proj model
+parser.add_argument('-proj_hidden_dim', type=int, default=1024,
+                    help='Hidden dim of MLP input projection (only used when -model mstemba_mlp_proj)')
+parser.add_argument('-proj_dropout', type=float, default=0.1,
+                    help='Dropout in MLP input projection (only used when -model mstemba_mlp_proj)')
 # Add new arguments from main_no_teacher.py
 parser.add_argument('--model', default='vim_tiny_patch16_224_bimambav2_final_pool_mean_abs_pos_embed_with_midclstok_div2', type=str, metavar='MODEL',
                     help='Name of model to train')
@@ -673,11 +681,25 @@ if __name__ == '__main__':
         if not args.resume:
             raise ValueError("-eval_only=True requires -resume <ckpt_path>")
 
-        in_feat_dim = 1024 if args.backbone == 'i3d' else 768
+        if args.backbone == 'i3d':
+            in_feat_dim = 1024
+        elif args.backbone == 'clip':
+            in_feat_dim = 768
+        elif args.backbone == 'scdnet':
+            in_feat_dim = 4096
+        else:
+            raise ValueError(f"Unknown backbone: {args.backbone}")
+        
+        extra_proj_kwargs = {}
+        if args.model == 'mstemba_mlp_proj':
+            extra_proj_kwargs['proj_hidden_dim'] = args.proj_hidden_dim
+            extra_proj_kwargs['proj_dropout'] = args.proj_dropout
+
         model = create_model(
             args.model, pretrained=False, num_classes=classes,
             drop_rate=args.drop, drop_path_rate=args.drop_path,
             drop_block_rate=None, in_feat_dim=in_feat_dim,
+            **extra_proj_kwargs,
         ).cuda()
 
         # Auto-detect checkpoint format: v2 CheckpointState payload vs legacy flat state_dict.
@@ -732,6 +754,15 @@ if __name__ == '__main__':
             in_feat_dim = 1024
         elif args.backbone == 'clip':
             in_feat_dim = 768
+        elif args.backbone == 'scdnet':
+            in_feat_dim = 4096
+        else:
+            raise ValueError(f"Unknown backbone: {args.backbone}")
+        
+        extra_proj_kwargs = {}
+        if args.model == 'mstemba_mlp_proj':
+            extra_proj_kwargs['proj_hidden_dim'] = args.proj_hidden_dim
+            extra_proj_kwargs['proj_dropout'] = args.proj_dropout
 
         # Create model using timm's create_model function
         model = create_model(
@@ -741,7 +772,8 @@ if __name__ == '__main__':
             drop_rate=args.drop,
             drop_path_rate=args.drop_path,
             drop_block_rate=None,
-            in_feat_dim=in_feat_dim
+            in_feat_dim=in_feat_dim,
+            **extra_proj_kwargs,
         )
         model.cuda()
 

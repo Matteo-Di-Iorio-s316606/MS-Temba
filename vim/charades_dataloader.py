@@ -80,7 +80,16 @@ class Charades(data_utl.Dataset):
 
     def __getitem__(self, index):
         entry = self.data[index]
-        feat = np.load(os.path.join(self.root, entry[0] + '.npy'))
+
+        feat_path = os.path.join(self.root, entry[0] + '.npy')
+        if not os.path.exists(feat_path):
+            print(f"[WARN] Missing feature: {entry[0]}, returning zero placeholder")
+            # We don't know T at this point; fall back to a single-frame zero feat
+            # then collate_fn will pad to num_clips with mask=0
+            feat = np.zeros((1, 4096), dtype=np.float32)
+        else:
+            feat = np.load(feat_path)  
+                  
         feat = feat.reshape((feat.shape[0], 1, 1, feat.shape[-1]))
         features = feat.astype(np.float32)
 
